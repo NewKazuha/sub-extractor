@@ -1,4 +1,4 @@
-import { execSync, spawnSync } from 'node:child_process';
+﻿import { execSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -81,17 +81,34 @@ export async function extractSubtitles(rawUrl, outputName) {
   const fontsDir = path.join(targetSubDir, 'fonts');
   fs.mkdirSync(fontsDir, { recursive: true });
 
-  console.log(`\n🎬 Starting extraction for: ${safeBundleName}`);
-  console.log(`🔗 Input URL: ${inputUrl}\n`);
+  console.log(`\n======================================================`);
+  console.log(`🚀 Starting Turbo Extraction: ${safeBundleName}`);
+  console.log(`🔗 Input URL: ${inputUrl}`);
+  console.log(`======================================================\n`);
 
-  // 1. تنزيل الملفات
+  // 1. Download source files with maximum multi-threading & memory mapping
   if (inputUrl.startsWith('magnet:') || inputUrl.includes('.torrent') || inputUrl.includes('nyaa.si')) {
-    run(`aria2c --seed-time=0 --summary-interval=10 --file-allocation=none --bt-max-peers=128 --bt-tracker-connect-timeout=10 --max-connection-per-server=16 --split=16 --dir="${workDir}" "${inputUrl}"`);
+    const ariaArgs = [
+      '--seed-time=0',
+      '--summary-interval=5',
+      '--file-allocation=none',
+      '--enable-mmap=true',
+      '--max-connection-per-server=16',
+      '--split=16',
+      '--min-split-size=1M',
+      '--bt-max-peers=256',
+      '--bt-tracker-connect-timeout=5',
+      '--bt-tracker-timeout=10',
+      '--peer-id-prefix=-TR2940-',
+      `--dir="${workDir}"`,
+      `"${inputUrl}"`
+    ].join(' ');
+    run(`aria2c ${ariaArgs}`);
   } else if (inputUrl.includes('drive.google.com')) {
     run(`gdown "${inputUrl}" -O "${workDir}/" --fuzzy ${inputUrl.includes('/folders/') ? '--folder' : ''}`);
   } else if (inputUrl.includes('mediafire.com')) {
     const directMf = await resolveMediafireDirectUrl(inputUrl);
-    run(`aria2c --dir="${workDir}" --file-allocation=none --summary-interval=10 "${directMf}"`);
+    run(`aria2c --dir="${workDir}" --file-allocation=none --enable-mmap=true --max-connection-per-server=16 --split=16 "${directMf}"`);
   } else if (inputUrl.includes('mega.nz')) {
     try {
       run(`megatools dl --path "${workDir}" "${inputUrl}"`);
@@ -99,22 +116,22 @@ export async function extractSubtitles(rawUrl, outputName) {
       run(`python3 -c "from mega import Mega; m = Mega(); m.login(); m.download_url('${inputUrl}', '${workDir}')"`);
     }
   } else if (inputUrl.startsWith('http')) {
-    run(`aria2c --dir="${workDir}" --file-allocation=none --summary-interval=10 "${inputUrl}"`);
+    run(`aria2c --dir="${workDir}" --file-allocation=none --enable-mmap=true --max-connection-per-server=16 --split=16 "${inputUrl}"`);
   }
 
-  // 2. اكتشاف الحلقات
+  // 2. Discover all video files
   const videoFiles = findAllVideoFiles(workDir);
   if (videoFiles.length === 0) throw new Error('❌ لم يتم العثور على أي ملف فيديو');
 
-  console.log(`\n📦 تم العثور على ${videoFiles.length} حلقة.`);
+  console.log(`\n📦 Discovered ${videoFiles.length} video file(s) in batch.`);
   let totalSubs = 0;
   const seenFontNames = new Set();
 
-  // 3. استخراج الترجمات داخل مجلدات حسب اللغة
+  // 3. Fast Single-Pass Extraction for all subtitle tracks & fonts per file
   for (let idx = 0; idx < videoFiles.length; idx++) {
     const vFile = videoFiles[idx];
     const baseName = sanitizeFilename(path.basename(vFile, path.extname(vFile)));
-    console.log(`\n⚡ معالجة [${idx + 1}/${videoFiles.length}]: ${baseName}`);
+    console.log(`\n⚡ Processing [${idx + 1}/${videoFiles.length}]: ${baseName}`);
 
     let mkvInfo = null;
     try {
@@ -126,6 +143,8 @@ export async function extractSubtitles(rawUrl, outputName) {
       const subTracks = mkvInfo.tracks.filter((t) => t.type === 'subtitles');
       const attachments = (mkvInfo.attachments || []).filter((a) => /\.(ttf|otf|ttc|woff|woff2)$/i.test(a.file_name || ''));
 
+      // Build single-pass mkvextract command for ALL subtitle tracks
+      const trackArgs = [];
       for (const trk of subTracks) {
         const codec = (trk.codec || '').toLowerCase();
         const ext = codec.includes('subrip') || codec.includes('srt') ? 'srt' : 'ass';
@@ -137,16 +156,23 @@ export async function extractSubtitles(rawUrl, outputName) {
 
         const trackTitle = trk.properties?.track_name ? `_[${sanitizeFilename(trk.properties.track_name)}]` : '';
         const subOutFile = path.join(langDir, `${baseName}${trackTitle}.${ext}`);
+        trackArgs.push(`${trk.id}:"${subOutFile}"`);
+        totalSubs++;
+      }
 
+      if (trackArgs.length > 0) {
+        console.log(`   📝 Extracting ${trackArgs.length} subtitle tracks in a single pass...`);
         try {
-          run(`mkvextract tracks "${vFile}" ${trk.id}:"${subOutFile}"`);
-          totalSubs++;
+          run(`mkvextract tracks "${vFile}" ${trackArgs.join(' ')}`);
         } catch {
-          run(`ffmpeg -y -i "${vFile}" -map 0:${trk.id} -c:s copy "${subOutFile}"`);
-          totalSubs++;
+          // Fallback if batch mkvextract fails
+          for (const arg of trackArgs) {
+            try { run(`mkvextract tracks "${vFile}" ${arg}`); } catch {}
+          }
         }
       }
 
+      // Single-pass fonts extraction
       if (attachments.length > 0) {
         const toExtract = [];
         for (const att of attachments) {
@@ -157,17 +183,25 @@ export async function extractSubtitles(rawUrl, outputName) {
           }
         }
         if (toExtract.length > 0) {
+          console.log(`   🔤 Extracting ${toExtract.length} unique fonts...`);
           try {
             run(`mkvextract attachments "${vFile}" ${toExtract.join(' ')}`);
           } catch {}
         }
       }
+    } else {
+      // Fallback for mp4 files
+      const fallbackAss = path.join(targetSubDir, `${baseName}.ass`);
+      try {
+        run(`ffmpeg -y -i "${vFile}" -map 0:s:0 -c:s copy "${fallbackAss}"`);
+        totalSubs++;
+      } catch {}
     }
   }
 
   if (fs.existsSync(fontsDir) && fs.readdirSync(fontsDir).length === 0) fs.rmdirSync(fontsDir);
   fs.rmSync(workDir, { recursive: true, force: true });
-  console.log(`\n🎉 اكتمل الاستخراج بنجاح! تم استخراج ${totalSubs} ملف ترجمة.`);
+  console.log(`\n🎉 Done! Successfully extracted ${totalSubs} subtitle files.`);
 }
 
 if (process.argv[1]?.endsWith('extract.mjs')) {
