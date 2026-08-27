@@ -1,4 +1,4 @@
-name: Extract Subtitles Cloud
+﻿name: Extract Subtitles Cloud
 
 on:
   workflow_dispatch:
