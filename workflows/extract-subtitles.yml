@@ -1,0 +1,57 @@
+name: Extract Subtitles Cloud
+
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: 'رابط التحميل (Nyaa, Torrent, Magnet, Drive, MEGA, Mediafire)'
+        required: true
+      name:
+        description: 'اسم العمل / الموسم'
+        required: true
+        default: 'Anime_Subtitles'
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Maximize Disk Space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/boost
+          df -h
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends mkvtoolnix aria2 megatools ffmpeg
+          pip install --no-cache-dir mega.py gdown
+
+      - name: Download & Extract
+        run: |
+          node src/extract.mjs "${{ inputs.url }}" "${{ inputs.name }}"
+
+      - name: Upload Clean Subtitles Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: "${{ inputs.name }}"
+          path: extracted_subtitles/
+          retention-days: 30
+
+      - name: Summary
+        run: |
+          echo "### 🎬 تم استخراج ملفات الترجمة والخطوط بنجاح!" >> $GITHUB_STEP_SUMMARY
+          echo "- **العمل:** \`${{ inputs.name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "يمكنك تنزيل الملف النظيف مباشرة من قسم **Artifacts** في الأعلى." >> $GITHUB_STEP_SUMMARY
