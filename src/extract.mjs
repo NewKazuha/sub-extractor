@@ -1,4 +1,4 @@
-﻿import { execSync, spawnSync } from 'node:child_process';
+import { execSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -41,12 +41,50 @@ function findAllVideoFiles(dir) {
   return results.sort((a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }));
 }
 
-function normalizeUrl(rawUrl) {
+const PUBLIC_TRACKERS = [
+  'http://tr.bangumi.moe:6969/announce',
+  'http://open.acg-gov.com:8001/announce',
+  'udp://tracker.opentrackr.org:1337/announce',
+  'udp://open.stealth.si:80/announce',
+  'udp://tracker.torrent.eu.org:451/announce'
+].map(t => `&tr=${encodeURIComponent(t)}`).join('');
+
+async function normalizeUrl(rawUrl) {
   let u = rawUrl.trim();
+
+  // Nyaa & Sukebei
   const nyaaMatch = u.match(/^https?:\/\/(?:www\.)?nyaa\.si\/view\/(\d+)/i);
   if (nyaaMatch) return `https://nyaa.si/download/${nyaaMatch[1]}.torrent`;
   const sukebeiMatch = u.match(/^https?:\/\/(?:www\.)?sukebei\.nyaa\.si\/view\/(\d+)/i);
   if (sukebeiMatch) return `https://sukebei.nyaa.si/download/${sukebeiMatch[1]}.torrent`;
+
+  // ACG.RIP
+  const acgRipMatch = u.match(/^https?:\/\/(?:www\.)?acg\.rip\/t\/(\d+)/i);
+  if (acgRipMatch) return `https://acg.rip/t/${acgRipMatch[1]}.torrent`;
+
+  // ACGNX (Share.acgnx.se / net)
+  const acgnxMatch = u.match(/^https?:\/\/(?:www\.)?(?:share\.)?acgnx\.(?:se|net)\/(?:show|down)-([a-f0-9]{40})/i);
+  if (acgnxMatch) return `magnet:?xt=urn:btih:${acgnxMatch[1]}${PUBLIC_TRACKERS}`;
+
+  // Bangumi.moe
+  const bangumiMatch = u.match(/^https?:\/\/(?:www\.)?bangumi\.moe\/torrent\/([a-f0-9]{24})/i);
+  if (bangumiMatch) {
+    try {
+      const res = await fetch(`https://bangumi.moe/api/v2/torrent/${bangumiMatch[1]}`);
+      if (res.ok) {
+        const data = await res.json();
+        if (data.magnet) {
+          return data.magnet.includes('&tr=') ? data.magnet : `${data.magnet}${PUBLIC_TRACKERS}`;
+        }
+        if (data.infoHash) {
+          return `magnet:?xt=urn:btih:${data.infoHash}${PUBLIC_TRACKERS}`;
+        }
+      }
+    } catch (err) {
+      console.warn('⚠️ Warning: Failed to resolve Bangumi.moe API, falling back to original URL.');
+    }
+  }
+
   return u;
 }
 
@@ -67,7 +105,8 @@ async function resolveMediafireDirectUrl(mfUrl) {
 }
 
 export async function extractSubtitles(rawUrl, outputName) {
-  let inputUrl = normalizeUrl(rawUrl);
+  let inputUrl = await normalizeUrl(rawUrl);
+  if (fs.existsSync(OUT_DIR)) fs.rmSync(OUT_DIR, { recursive: true, force: true });
   fs.mkdirSync(OUT_DIR, { recursive: true });
 
   const workDir = path.resolve('temp_work');
@@ -75,9 +114,7 @@ export async function extractSubtitles(rawUrl, outputName) {
   fs.mkdirSync(workDir, { recursive: true });
 
   const safeBundleName = sanitizeFilename(outputName || 'Subtitles_Batch');
-  const targetSubDir = path.join(OUT_DIR, safeBundleName);
-  if (fs.existsSync(targetSubDir)) fs.rmSync(targetSubDir, { recursive: true, force: true });
-  fs.mkdirSync(targetSubDir, { recursive: true });
+  const targetSubDir = OUT_DIR;
   const fontsDir = path.join(targetSubDir, 'fonts');
   fs.mkdirSync(fontsDir, { recursive: true });
 
@@ -87,12 +124,14 @@ export async function extractSubtitles(rawUrl, outputName) {
   console.log(`======================================================\n`);
 
   // 1. Download source files with maximum multi-threading & memory mapping
-  if (inputUrl.startsWith('magnet:') || inputUrl.includes('.torrent') || inputUrl.includes('nyaa.si')) {
+  if (inputUrl.startsWith('magnet:') || inputUrl.includes('.torrent') || inputUrl.includes('nyaa.si') || inputUrl.includes('acg.rip')) {
     const ariaArgs = [
       '--seed-time=0',
       '--summary-interval=5',
       '--file-allocation=none',
       '--enable-mmap=true',
+      '--check-certificate=false',
+      '--user-agent="Mozilla/5.0"',
       '--max-connection-per-server=16',
       '--split=16',
       '--min-split-size=1M',
