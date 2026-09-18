@@ -49,8 +49,54 @@ const PUBLIC_TRACKERS = [
   'udp://tracker.torrent.eu.org:451/announce'
 ].map(t => `&tr=${encodeURIComponent(t)}`).join('');
 
+function extractGoogleDriveId(url) {
+  const m = url.match(/(?:drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?id=)|drive\.usercontent\.google\.com\/download\?id=)([a-zA-Z0-9_-]+)/i);
+  return m ? m[1] : null;
+}
+
+async function resolveMitedriveDirectUrl(url) {
+  const match = url.match(/mitedrive\.com\/(?:download|view|files)\/([a-zA-Z0-9_-]+)/i) ||
+                url.match(/api\.mitedrive\.com\/api\/view\/([a-zA-Z0-9_-]+)/i);
+  if (!match) return url;
+  const slug = match[1];
+  console.log(`🔍 Resolving MiteDrive direct download link for slug: ${slug}...`);
+  try {
+    const res = await fetch(`https://api.mitedrive.com/api/view/${slug}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': `https://mitedrive.com/download/${slug}`,
+        'Origin': 'https://mitedrive.com'
+      },
+      body: JSON.stringify({})
+    });
+    if (res.ok) {
+      const json = await res.json();
+      if (json.success && json.data?.original_url) {
+        console.log(`🔗 Successfully resolved MiteDrive URL: ${json.data.original_url}`);
+        return json.data.original_url;
+      }
+    }
+  } catch (err) {
+    console.warn(`⚠️ Warning: Failed to resolve MiteDrive API: ${err.message}`);
+  }
+  return url;
+}
+
 async function normalizeUrl(rawUrl) {
   let u = rawUrl.trim();
+
+  // Pixeldrain
+  const pixeldrainMatch = u.match(/^https?:\/\/(?:www\.)?pixeldrain\.com\/(?:u|api\/file)\/([a-zA-Z0-9_-]+)/i);
+  if (pixeldrainMatch) {
+    return `https://pixeldrain.com/api/file/${pixeldrainMatch[1]}?download`;
+  }
+
+  // MiteDrive
+  if (u.includes('mitedrive.com')) {
+    return await resolveMitedriveDirectUrl(u);
+  }
 
   // Nyaa & Sukebei
   const nyaaMatch = u.match(/^https?:\/\/(?:www\.)?nyaa\.si\/view\/(\d+)/i);
@@ -104,6 +150,112 @@ async function resolveMediafireDirectUrl(mfUrl) {
   return mfUrl;
 }
 
+function extractArchivesRecursively(dir) {
+  const archiveExts = ['.rar', '.zip', '.7z', '.tar', '.gz', '.bz2', '.xz', '.tgz'];
+  let anyUnpacked = false;
+
+  function findArchives(d) {
+    const found = [];
+    if (!fs.existsSync(d)) return found;
+    const entries = fs.readdirSync(d, { withFileTypes: true });
+    for (const entry of entries) {
+      const full = path.join(d, entry.name);
+      if (entry.isDirectory()) {
+        found.push(...findArchives(full));
+      } else if (entry.isFile()) {
+        const lower = entry.name.toLowerCase();
+        if (archiveExts.some(ext => lower.endsWith(ext))) {
+          found.push(full);
+        }
+      }
+    }
+    return found;
+  }
+
+  for (let pass = 1; pass <= 5; pass++) {
+    const archives = findArchives(dir);
+    if (archives.length === 0) break;
+    anyUnpacked = true;
+
+    for (const arch of archives) {
+      const targetDir = path.dirname(arch);
+      console.log(`📦 Unpacking archive: ${path.basename(arch)}...`);
+      let success = false;
+
+      // 1. Try 7z (supported via 7zip / p7zip-full, handles RAR5/7z/ZIP/TAR)
+      try {
+        run(`7z x -y -p"" -o"${targetDir}" "${arch}"`);
+        success = true;
+      } catch {}
+
+      // 2. Try unar
+      if (!success) {
+        try {
+          run(`unar -quiet -o "${targetDir}" "${arch}"`);
+          success = true;
+        } catch {}
+      }
+
+      // 3. Try tar (built-in on Windows & Linux)
+      if (!success) {
+        try {
+          run(`tar -xf "${arch}" -C "${targetDir}"`);
+          success = true;
+        } catch {}
+      }
+
+      // 4. Try unzip or unrar
+      if (!success) {
+        const lower = arch.toLowerCase();
+        if (lower.endsWith('.zip')) {
+          try { run(`unzip -o -d "${targetDir}" "${arch}"`); success = true; } catch {}
+        } else if (lower.endsWith('.rar')) {
+          try { run(`unrar x -o+ "${arch}" "${targetDir}"`); success = true; } catch {}
+        }
+      }
+
+      if (success) {
+        fs.rmSync(arch, { force: true });
+      } else {
+        console.warn(`⚠️ Warning: Could not unpack archive: ${path.basename(arch)}`);
+      }
+    }
+  }
+  return anyUnpacked;
+}
+
+function findAllSubtitleFiles(dir) {
+  const results = [];
+  if (!fs.existsSync(dir)) return results;
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      results.push(...findAllSubtitleFiles(fullPath));
+    } else if (entry.isFile()) {
+      const ext = path.extname(entry.name).toLowerCase();
+      if (['.ass', '.srt', '.vtt', '.sup'].includes(ext)) results.push(fullPath);
+    }
+  }
+  return results;
+}
+
+function findAllFontFiles(dir) {
+  const results = [];
+  if (!fs.existsSync(dir)) return results;
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      results.push(...findAllFontFiles(fullPath));
+    } else if (entry.isFile()) {
+      const ext = path.extname(entry.name).toLowerCase();
+      if (['.ttf', '.otf', '.ttc', '.woff', '.woff2'].includes(ext)) results.push(fullPath);
+    }
+  }
+  return results;
+}
+
 export async function extractSubtitles(rawUrl, outputName) {
   let inputUrl = await normalizeUrl(rawUrl);
   if (fs.existsSync(OUT_DIR)) fs.rmSync(OUT_DIR, { recursive: true, force: true });
@@ -123,6 +275,9 @@ export async function extractSubtitles(rawUrl, outputName) {
   console.log(`🔗 Input URL: ${inputUrl}`);
   console.log(`======================================================\n`);
 
+  const isGdrive = inputUrl.includes('drive.google.com') || inputUrl.includes('drive.usercontent.google.com');
+  const gdriveId = isGdrive ? extractGoogleDriveId(inputUrl) : null;
+
   // 1. Download source files with maximum multi-threading & memory mapping
   if (inputUrl.startsWith('magnet:') || inputUrl.includes('.torrent') || inputUrl.includes('nyaa.si') || inputUrl.includes('acg.rip')) {
     const ariaArgs = [
@@ -131,6 +286,7 @@ export async function extractSubtitles(rawUrl, outputName) {
       '--file-allocation=none',
       '--enable-mmap=true',
       '--check-certificate=false',
+      '--content-disposition=true',
       '--user-agent="Mozilla/5.0"',
       '--max-connection-per-server=16',
       '--split=16',
@@ -143,11 +299,23 @@ export async function extractSubtitles(rawUrl, outputName) {
       `"${inputUrl}"`
     ].join(' ');
     run(`aria2c ${ariaArgs}`);
-  } else if (inputUrl.includes('drive.google.com')) {
-    run(`gdown "${inputUrl}" -O "${workDir}/" --fuzzy ${inputUrl.includes('/folders/') ? '--folder' : ''}`);
+  } else if (isGdrive) {
+    if (inputUrl.includes('/folders/')) {
+      run(`gdown "${inputUrl}" -O "${workDir}/" --folder --fuzzy`);
+    } else if (gdriveId) {
+      try {
+        run(`gdown --id "${gdriveId}" -O "${workDir}/" --fuzzy`);
+      } catch (err) {
+        console.warn('⚠️ Warning: gdown direct download failed, attempting aria2c fallback with confirm=t...');
+        const directGdrive = `https://drive.usercontent.google.com/download?id=${gdriveId}&export=download&confirm=t`;
+        run(`aria2c --dir="${workDir}" --content-disposition=true --check-certificate=false --header="User-Agent: Mozilla/5.0" "${directGdrive}"`);
+      }
+    } else {
+      run(`gdown "${inputUrl}" -O "${workDir}/" --fuzzy`);
+    }
   } else if (inputUrl.includes('mediafire.com')) {
     const directMf = await resolveMediafireDirectUrl(inputUrl);
-    run(`aria2c --dir="${workDir}" --file-allocation=none --enable-mmap=true --max-connection-per-server=16 --split=16 "${directMf}"`);
+    run(`aria2c --dir="${workDir}" --content-disposition=true --file-allocation=none --enable-mmap=true --check-certificate=false --header="User-Agent: Mozilla/5.0" --max-connection-per-server=16 --split=16 "${directMf}"`);
   } else if (inputUrl.includes('mega.nz')) {
     try {
       run(`megatools dl --path "${workDir}" "${inputUrl}"`);
@@ -155,18 +323,58 @@ export async function extractSubtitles(rawUrl, outputName) {
       run(`python3 -c "from mega import Mega; m = Mega(); m.login(); m.download_url('${inputUrl}', '${workDir}')"`);
     }
   } else if (inputUrl.startsWith('http')) {
-    run(`aria2c --dir="${workDir}" --file-allocation=none --enable-mmap=true --max-connection-per-server=16 --split=16 "${inputUrl}"`);
+    run(`aria2c --dir="${workDir}" --content-disposition=true --file-allocation=none --enable-mmap=true --check-certificate=false --header="User-Agent: Mozilla/5.0" --max-connection-per-server=16 --split=16 "${inputUrl}"`);
   }
 
-  // 2. Discover all video files
-  const videoFiles = findAllVideoFiles(workDir);
-  if (videoFiles.length === 0) throw new Error('❌ لم يتم العثور على أي ملف فيديو');
+  // 2. Unpack any archives (.rar, .zip, .7z, etc.)
+  extractArchivesRecursively(workDir);
 
-  console.log(`\n📦 Discovered ${videoFiles.length} video file(s) in batch.`);
   let totalSubs = 0;
   const seenFontNames = new Set();
 
-  // 3. Fast Single-Pass Extraction for all subtitle tracks & fonts per file
+  // 3. Discover standalone subtitle files and fonts extracted from archives
+  const standaloneSubs = findAllSubtitleFiles(workDir);
+  const standaloneFonts = findAllFontFiles(workDir);
+
+  if (standaloneFonts.length > 0) {
+    console.log(`\n🔤 Found ${standaloneFonts.length} font file(s) in source/archive. Copying to fonts directory...`);
+    for (const fFile of standaloneFonts) {
+      const fBase = path.basename(fFile);
+      if (!seenFontNames.has(fBase.toLowerCase())) {
+        seenFontNames.add(fBase.toLowerCase());
+        fs.copyFileSync(fFile, path.join(fontsDir, fBase));
+      }
+    }
+  }
+
+  if (standaloneSubs.length > 0) {
+    console.log(`\n📝 Found ${standaloneSubs.length} standalone subtitle file(s) in source/archive.`);
+    for (const sFile of standaloneSubs) {
+      const sBase = path.basename(sFile);
+      let detectedLang = 'Other';
+      const lower = sBase.toLowerCase();
+      for (const [code, lang] of Object.entries(LANG_MAP)) {
+        if (new RegExp(`[._\\[\\(-]${code}[._\\]\\)-]`, 'i').test(lower)) {
+          detectedLang = lang;
+          break;
+        }
+      }
+      const langDir = path.join(targetSubDir, detectedLang);
+      fs.mkdirSync(langDir, { recursive: true });
+      fs.copyFileSync(sFile, path.join(langDir, sBase));
+      totalSubs++;
+    }
+  }
+
+  // 4. Discover all video files
+  const videoFiles = findAllVideoFiles(workDir);
+  if (videoFiles.length === 0 && standaloneSubs.length === 0) {
+    throw new Error('❌ لم يتم العثور على أي ملف فيديو أو ملفات ترجمة');
+  }
+
+  console.log(`\n📦 Discovered ${videoFiles.length} video file(s) in batch.`);
+
+  // 5. Fast Single-Pass Extraction for all subtitle tracks & fonts per video file
   for (let idx = 0; idx < videoFiles.length; idx++) {
     const vFile = videoFiles[idx];
     const baseName = sanitizeFilename(path.basename(vFile, path.extname(vFile)));
