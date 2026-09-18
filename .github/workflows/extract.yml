@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       url:
-        description: 'رابط التحميل (Nyaa, Torrent, Magnet, Drive, MEGA, Mediafire, Pixeldrain, MiteDrive)'
+        description: 'رابط التحميل (Nyaa, Torrent, Magnet, Drive, MEGA folder/file, Mediafire, Pixeldrain, MiteDrive, DDL directory/file)'
         required: true
       name:
         description: 'اسم العمل / الموسم'
@@ -28,11 +28,12 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Tools (MKVToolNix, Aria2, Megatools, Gdown, 7-Zip, Unar)
+      - name: Install Tools (MKVToolNix, Aria2, Megatools, Gdown, 7-Zip, Unar, Node dependencies)
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends mkvtoolnix aria2 megatools p7zip-full unar unrar-free
           pip install --no-cache-dir --upgrade mega.py gdown
+          npm install
 
       - name: Turbo Download & Extract Subtitles
         run: |

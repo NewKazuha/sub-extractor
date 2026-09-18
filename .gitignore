@@ -1,0 +1,4 @@
+node_modules/
+temp_work/
+extracted_subtitles/
+*.log
