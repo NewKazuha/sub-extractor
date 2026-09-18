@@ -491,14 +491,29 @@ export async function extractSubtitles(rawUrl, outputName) {
       const megaFile = MegaFile.fromURL(inputUrl);
       await megaFile.loadAttributes();
 
-      if (megaFile.directory && Array.isArray(megaFile.children)) {
-        console.log(`📂 MEGA folder detected: "${megaFile.name}" with ${megaFile.children.length} item(s)`);
-        for (let i = 0; i < megaFile.children.length; i++) {
-          const child = megaFile.children[i];
-          if (child.directory) continue; // Skip subdirectories
+      function getAllMegaFiles(node) {
+        const files = [];
+        if (!node) return files;
+        if (!node.directory) {
+          files.push(node);
+          return files;
+        }
+        if (Array.isArray(node.children)) {
+          for (const child of node.children) {
+            files.push(...getAllMegaFiles(child));
+          }
+        }
+        return files;
+      }
+
+      if (megaFile.directory) {
+        const allFiles = getAllMegaFiles(megaFile);
+        console.log(`📂 MEGA folder detected: "${megaFile.name}" with ${allFiles.length} file(s)`);
+        for (let i = 0; i < allFiles.length; i++) {
+          const child = allFiles[i];
           const safeName = sanitizeFilename(child.name);
           const outPath = path.join(workDir, safeName);
-          console.log(`\n⬇️ [${i + 1}/${megaFile.children.length}] Downloading MEGA file: ${safeName} (${(child.size / (1024 * 1024)).toFixed(1)} MB)...`);
+          console.log(`\n⬇️ [${i + 1}/${allFiles.length}] Downloading MEGA file: ${safeName} (${(child.size / (1024 * 1024)).toFixed(1)} MB)...`);
           const stream = child.download();
           const writeStream = fs.createWriteStream(outPath);
           await pipeline(stream, writeStream);
