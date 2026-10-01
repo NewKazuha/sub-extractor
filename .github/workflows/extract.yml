@@ -51,62 +51,13 @@ jobs:
         run: |
           node src/extract.mjs "${{ inputs.url }}" "${{ inputs.name }}"
 
-      - name: Package Subtitles & Fonts (Auto-Split if > 45MB)
-        run: |
-          SAFE_NAME=$(python3 -c "import re; print(re.sub(r'[\\\\/:*?\"<>|]', '_', '''${{ inputs.name }}''').strip() or 'Subtitles')")
-          echo "SAFE_NAME=${SAFE_NAME}" >> $GITHUB_ENV
-
-          cd extracted_subtitles
-          zip -r "../${SAFE_NAME}.zip" .
-          cd ..
-
-          ZIP_SIZE=$(stat -c%s "${SAFE_NAME}.zip" 2>/dev/null || stat -f%z "${SAFE_NAME}.zip" 2>/dev/null || wc -c < "${SAFE_NAME}.zip")
-          echo "ZIP size: ${ZIP_SIZE} bytes"
-
-          if [ "$ZIP_SIZE" -gt 47185920 ]; then
-            echo "⚠️ File exceeds 45MB. Splitting into 45MB parts for Telegram compatibility..."
-            7z a -v45m -mx=9 "${SAFE_NAME}.7z" ./extracted_subtitles/*
-            echo "IS_SPLIT=true" >> $GITHUB_ENV
-          else
-            echo "IS_SPLIT=false" >> $GITHUB_ENV
-          fi
-
-      - name: Send Subtitles to Telegram
-        if: inputs.chat_id != ''
+      - name: Package Subtitles & Send to Telegram
         env:
+          TELEGRAM_CHAT_ID: ${{ inputs.chat_id }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          ANIME_NAME: ${{ inputs.name }}
         run: |
-          if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
-            echo "⚠️ TELEGRAM_BOT_TOKEN is not configured in repository secrets. Skipping Telegram delivery."
-            exit 0
-          fi
-
-          if [ "$IS_SPLIT" = "true" ]; then
-            PARTS=($(ls -1 "${SAFE_NAME}".7z.* 2>/dev/null | sort))
-            TOTAL=${#PARTS[@]}
-            echo "📤 Sending ${TOTAL} split parts to Telegram chat ${{ inputs.chat_id }}..."
-
-            INDEX=1
-            for PART in "${PARTS[@]}"; do
-              echo "Sending part ${INDEX}/${TOTAL}: ${PART}..."
-              curl -s -F chat_id="${{ inputs.chat_id }}" \
-                   -F document=@"${PART}" \
-                   -F parse_mode="Markdown" \
-                   -F caption="\`${SAFE_NAME} (الجزء ${INDEX} من ${TOTAL})\`" \
-                   https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument
-              INDEX=$((INDEX + 1))
-              sleep 1
-            done
-          else
-            if [ -f "${SAFE_NAME}.zip" ]; then
-              echo "📤 Sending ${SAFE_NAME}.zip to Telegram chat ${{ inputs.chat_id }}..."
-              curl -s -F chat_id="${{ inputs.chat_id }}" \
-                   -F document=@"${SAFE_NAME}.zip" \
-                   -F parse_mode="Markdown" \
-                   -F caption="\`${SAFE_NAME}.zip\`" \
-                   https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument
-            fi
-          fi
+          python3 src/package_and_send.py
 
       - name: Notify Failure to Telegram
         if: failure() && inputs.chat_id != ''

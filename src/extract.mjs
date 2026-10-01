@@ -486,75 +486,76 @@ export async function extractSubtitles(rawUrl, outputName) {
     console.log(`☁️ Processing MEGA link...`);
     let megaSuccess = false;
 
-    // A. Attempt megajs (Pure Node.js streaming directly to disk)
+    // A. First Attempt: megatools dl (High-speed multi-threaded C binary with native AES acceleration)
+    const convertedUrl = convertMegaUrlForMegatools(inputUrl);
     try {
-      const megaFile = MegaFile.fromURL(inputUrl);
-      await megaFile.loadAttributes();
+      console.log(`🚀 Attempting high-speed megatools download: ${convertedUrl}`);
+      run(`megatools dl --path "${workDir}" --no-progress "${convertedUrl}"`);
+      const extracted = processWorkDirFiles(workDir, targetSubDir, fontsDir, seenFontNames);
+      totalSubs += extracted;
+      megaSuccess = true;
+      console.log(`✅ High-speed megatools download completed successfully!`);
+    } catch (mtErr) {
+      console.warn(`⚠️ megatools dl did not succeed (${mtErr.message}). Falling back to megajs streaming...`);
+    }
 
-      function getAllMegaFiles(node) {
-        const files = [];
-        if (!node) return files;
-        if (!node.directory) {
-          files.push(node);
+    // B. Second Attempt: megajs (Pure Node.js streaming fallback)
+    if (!megaSuccess) {
+      try {
+        const megaFile = MegaFile.fromURL(inputUrl);
+        await megaFile.loadAttributes();
+
+        function getAllMegaFiles(node) {
+          const files = [];
+          if (!node) return files;
+          if (!node.directory) {
+            files.push(node);
+            return files;
+          }
+          if (Array.isArray(node.children)) {
+            for (const child of node.children) {
+              files.push(...getAllMegaFiles(child));
+            }
+          }
           return files;
         }
-        if (Array.isArray(node.children)) {
-          for (const child of node.children) {
-            files.push(...getAllMegaFiles(child));
-          }
-        }
-        return files;
-      }
 
-      if (megaFile.directory) {
-        const allFiles = getAllMegaFiles(megaFile);
-        console.log(`📂 MEGA folder detected: "${megaFile.name}" with ${allFiles.length} file(s)`);
-        for (let i = 0; i < allFiles.length; i++) {
-          const child = allFiles[i];
-          const safeName = sanitizeFilename(child.name);
+        if (megaFile.directory) {
+          const allFiles = getAllMegaFiles(megaFile);
+          console.log(`📂 MEGA folder detected: "${megaFile.name}" with ${allFiles.length} file(s)`);
+          for (let i = 0; i < allFiles.length; i++) {
+            const child = allFiles[i];
+            const safeName = sanitizeFilename(child.name);
+            const outPath = path.join(workDir, safeName);
+            console.log(`\n⬇️ [${i + 1}/${allFiles.length}] Downloading MEGA file: ${safeName} (${(child.size / (1024 * 1024)).toFixed(1)} MB)...`);
+            const stream = child.download();
+            const writeStream = fs.createWriteStream(outPath);
+            await pipeline(stream, writeStream);
+            console.log(`✅ Downloaded: ${safeName}`);
+
+            const extracted = processWorkDirFiles(workDir, targetSubDir, fontsDir, seenFontNames);
+            totalSubs += extracted;
+          }
+          megaSuccess = true;
+        } else {
+          const safeName = sanitizeFilename(megaFile.name);
           const outPath = path.join(workDir, safeName);
-          console.log(`\n⬇️ [${i + 1}/${allFiles.length}] Downloading MEGA file: ${safeName} (${(child.size / (1024 * 1024)).toFixed(1)} MB)...`);
-          const stream = child.download();
+          console.log(`⬇️ Downloading single MEGA file: ${safeName} (${(megaFile.size / (1024 * 1024)).toFixed(1)} MB)...`);
+          const stream = megaFile.download();
           const writeStream = fs.createWriteStream(outPath);
           await pipeline(stream, writeStream);
           console.log(`✅ Downloaded: ${safeName}`);
 
           const extracted = processWorkDirFiles(workDir, targetSubDir, fontsDir, seenFontNames);
           totalSubs += extracted;
+          megaSuccess = true;
         }
-        megaSuccess = true;
-      } else {
-        const safeName = sanitizeFilename(megaFile.name);
-        const outPath = path.join(workDir, safeName);
-        console.log(`⬇️ Downloading single MEGA file: ${safeName} (${(megaFile.size / (1024 * 1024)).toFixed(1)} MB)...`);
-        const stream = megaFile.download();
-        const writeStream = fs.createWriteStream(outPath);
-        await pipeline(stream, writeStream);
-        console.log(`✅ Downloaded: ${safeName}`);
-
-        const extracted = processWorkDirFiles(workDir, targetSubDir, fontsDir, seenFontNames);
-        totalSubs += extracted;
-        megaSuccess = true;
-      }
-    } catch (megaErr) {
-      console.warn(`⚠️ megajs encountered an issue: ${megaErr.message}. Attempting megatools fallback...`);
-    }
-
-    // B. Fallback to megatools with converted URL
-    if (!megaSuccess) {
-      const convertedUrl = convertMegaUrlForMegatools(inputUrl);
-      try {
-        console.log(`🔧 Running megatools dl with: ${convertedUrl}`);
-        run(`megatools dl --path "${workDir}" --no-progress "${convertedUrl}"`);
-        const extracted = processWorkDirFiles(workDir, targetSubDir, fontsDir, seenFontNames);
-        totalSubs += extracted;
-        megaSuccess = true;
-      } catch (mtErr) {
-        console.warn(`⚠️ megatools dl failed: ${mtErr.message}. Attempting python fallback...`);
+      } catch (megaErr) {
+        console.warn(`⚠️ megajs encountered an issue: ${megaErr.message}. Attempting python fallback...`);
       }
     }
 
-    // C. Fallback to python mega.py
+    // C. Third Attempt: python mega.py fallback
     if (!megaSuccess) {
       try {
         run(`python3 -c "from mega import Mega; m = Mega(); m.login(); m.download_url('${inputUrl}', '${workDir}')"`);
