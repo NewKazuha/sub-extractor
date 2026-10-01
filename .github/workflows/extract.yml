@@ -22,6 +22,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Maximize Runner Disk Space (Free up ~75GB)
+        run: |
+          echo "=== 🧹 Cleaning unused pre-installed packages to maximize free space ==="
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/powershell /opt/hostedtoolcache/CodeQL /usr/share/swift /usr/lib/jvm || true
+          sudo docker image prune -a --force || true
+          echo "=== 💾 Available Disk Space ==="
+          df -h /
+
       - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
@@ -43,23 +51,54 @@ jobs:
         run: |
           node src/extract.mjs "${{ inputs.url }}" "${{ inputs.name }}"
 
-      - name: Package Subtitles & Fonts into ZIP
+      - name: Package Subtitles & Fonts (Auto-Split if > 45MB)
         run: |
           SAFE_NAME=$(python3 -c "import re; print(re.sub(r'[\\\\/:*?\"<>|]', '_', '''${{ inputs.name }}''').strip() or 'Subtitles')")
+          echo "SAFE_NAME=${SAFE_NAME}" >> $GITHUB_ENV
+
           cd extracted_subtitles
           zip -r "../${SAFE_NAME}.zip" .
           cd ..
-          echo "ZIP_NAME=${SAFE_NAME}.zip" >> $GITHUB_ENV
 
-      - name: Send ZIP to Telegram
+          ZIP_SIZE=$(stat -c%s "${SAFE_NAME}.zip" 2>/dev/null || stat -f%z "${SAFE_NAME}.zip" 2>/dev/null || wc -c < "${SAFE_NAME}.zip")
+          echo "ZIP size: ${ZIP_SIZE} bytes"
+
+          if [ "$ZIP_SIZE" -gt 47185920 ]; then
+            echo "⚠️ File exceeds 45MB. Splitting into 45MB parts for Telegram compatibility..."
+            7z a -v45m -mx=9 "${SAFE_NAME}.7z" ./extracted_subtitles/*
+            echo "IS_SPLIT=true" >> $GITHUB_ENV
+          else
+            echo "IS_SPLIT=false" >> $GITHUB_ENV
+          fi
+
+      - name: Send Subtitles to Telegram
         if: ${{ inputs.chat_id != '' && secrets.TELEGRAM_BOT_TOKEN != '' }}
         run: |
-          if [ -f "${{ env.ZIP_NAME }}" ]; then
-            echo "📤 Sending ${{ env.ZIP_NAME }} to Telegram chat ${{ inputs.chat_id }}..."
-            curl -v -F chat_id="${{ inputs.chat_id }}" \
-                 -F document=@"${{ env.ZIP_NAME }}" \
-                 -F caption="🎬 تم استخراج ملفات الترجمة والخطوط بنجاح!%0A📌 العمل: ${{ inputs.name }}" \
-                 https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument
+          SAFE_NAME="${{ env.SAFE_NAME }}"
+
+          if [ "${{ env.IS_SPLIT }}" = "true" ]; then
+            PARTS=($(ls -1 "${SAFE_NAME}".7z.* | sort))
+            TOTAL=${#PARTS[@]}
+            echo "📤 Sending ${TOTAL} split parts to Telegram chat ${{ inputs.chat_id }}..."
+
+            INDEX=1
+            for PART in "${PARTS[@]}"; do
+              echo "Sending part ${INDEX}/${TOTAL}: ${PART}..."
+              curl -s -F chat_id="${{ inputs.chat_id }}" \
+                   -F document=@"${PART}" \
+                   -F caption="🎬 الترجمات والخطوط (الجزء ${INDEX} من ${TOTAL})%0A📌 العمل: ${{ inputs.name }}" \
+                   https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument
+              INDEX=$((INDEX + 1))
+              sleep 1
+            done
+          else
+            if [ -f "${SAFE_NAME}.zip" ]; then
+              echo "📤 Sending ${SAFE_NAME}.zip to Telegram chat ${{ inputs.chat_id }}..."
+              curl -s -F chat_id="${{ inputs.chat_id }}" \
+                   -F document=@"${SAFE_NAME}.zip" \
+                   -F caption="🎬 تم استخراج ملفات الترجمة والخطوط بنجاح!%0A📌 العمل: ${{ inputs.name }}" \
+                   https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument
+            fi
           fi
 
       - name: Notify Failure to Telegram
