@@ -91,7 +91,8 @@ jobs:
               echo "Sending part ${INDEX}/${TOTAL}: ${PART}..."
               curl -s -F chat_id="${{ inputs.chat_id }}" \
                    -F document=@"${PART}" \
-                   -F caption="${SAFE_NAME} (الجزء ${INDEX} من ${TOTAL})" \
+                   -F parse_mode="Markdown" \
+                   -F caption="\`${SAFE_NAME} (الجزء ${INDEX} من ${TOTAL})\`" \
                    https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument
               INDEX=$((INDEX + 1))
               sleep 1
@@ -101,7 +102,8 @@ jobs:
               echo "📤 Sending ${SAFE_NAME}.zip to Telegram chat ${{ inputs.chat_id }}..."
               curl -s -F chat_id="${{ inputs.chat_id }}" \
                    -F document=@"${SAFE_NAME}.zip" \
-                   -F caption="${SAFE_NAME}.zip" \
+                   -F parse_mode="Markdown" \
+                   -F caption="\`${SAFE_NAME}.zip\`" \
                    https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument
             fi
           fi

@@ -54,17 +54,20 @@ async function handleTelegramMessage(message, env) {
   const chatId = message.chat.id;
   const text = (message.text || '').trim();
 
-  // Security check: restrict to allowed user if configured
-  if (env.ALLOWED_CHAT_ID && String(chatId) !== String(env.ALLOWED_CHAT_ID)) {
-    await sendTelegramMessage(env.TELEGRAM_BOT_TOKEN, chatId, '⛔ عذراً، هذا البوت خاص وغير متاح للاستخدام العام.');
-    return;
+  // Security check: restrict to allowed user(s) if configured
+  if (env.ALLOWED_CHAT_ID) {
+    const allowedList = String(env.ALLOWED_CHAT_ID).split(',').map(id => id.trim());
+    if (!allowedList.includes(String(chatId))) {
+      await sendTelegramMessage(env.TELEGRAM_BOT_TOKEN, chatId, '⛔ عذراً، هذا البوت خاص وغير متاح للاستخدام العام.');
+      return;
+    }
   }
 
   // Handle /start or /help
   if (text === '/start' || text === '/help') {
     const helpMsg = `🎬 *مرحباً بك في بوت استخراج الترجمات والخطوط!*
 
-أرسل لي الرابط واسم العمل، وسيقوم البوت بتشغيل خوادم GitHub لتحميله واستخراج الترجمات والخطوط وإرسالها لك في ملف مضغوط مباشرة هنا!
+أرسل لي الرابط وتحته اسم العمل، وسيقوم البوت بتشغيل خوادم GitHub لتحميله واستخراج الترجمات والخطوط وإرسالها لك في ملف مضغوط مباشرة هنا!
 
 📌 *المواقع والروابط المدعومة:*
 • مجلدات وملفات MEGA (\`mega.nz/folder/...\` أو \`file\`)
@@ -75,8 +78,9 @@ async function handleTelegramMessage(message, env) {
 • روابط التورنت والماجنت (Nyaa، إلخ)
 
 💡 *كيفية الاستخدام:*
-أرسل الرابط متبوعاً بمسافة ثم اسم العمل، مثال:
-\`الرابط اسم_العمل\``;
+أرسل الرابط، وضع اسم العمل في السطر التالي، مثال:
+\`https://...\`
+\`اسم العمل\``;
     await sendTelegramMessage(env.TELEGRAM_BOT_TOKEN, chatId, helpMsg, 'Markdown');
     return;
   }
@@ -95,7 +99,7 @@ async function handleTelegramMessage(message, env) {
     await sendTelegramMessage(
       env.TELEGRAM_BOT_TOKEN,
       chatId,
-      `⚠️ *يرجى إرسال اسم العمل بجانب الرابط!*\n\nمثال:\n\`${targetUrl} اسم_العمل\``,
+      `⚠️ *يرجى إرسال اسم العمل تحت الرابط!*\n\nمثال:\n\`${targetUrl}\`\n\`اسم العمل\``,
       'Markdown'
     );
     return;
