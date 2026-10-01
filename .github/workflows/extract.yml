@@ -72,12 +72,17 @@ jobs:
           fi
 
       - name: Send Subtitles to Telegram
-        if: ${{ inputs.chat_id != '' && secrets.TELEGRAM_BOT_TOKEN != '' }}
+        if: inputs.chat_id != ''
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         run: |
-          SAFE_NAME="${{ env.SAFE_NAME }}"
+          if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
+            echo "⚠️ TELEGRAM_BOT_TOKEN is not configured in repository secrets. Skipping Telegram delivery."
+            exit 0
+          fi
 
-          if [ "${{ env.IS_SPLIT }}" = "true" ]; then
-            PARTS=($(ls -1 "${SAFE_NAME}".7z.* | sort))
+          if [ "$IS_SPLIT" = "true" ]; then
+            PARTS=($(ls -1 "${SAFE_NAME}".7z.* 2>/dev/null | sort))
             TOTAL=${#PARTS[@]}
             echo "📤 Sending ${TOTAL} split parts to Telegram chat ${{ inputs.chat_id }}..."
 
@@ -87,7 +92,7 @@ jobs:
               curl -s -F chat_id="${{ inputs.chat_id }}" \
                    -F document=@"${PART}" \
                    -F caption="🎬 الترجمات والخطوط (الجزء ${INDEX} من ${TOTAL})%0A📌 العمل: ${{ inputs.name }}" \
-                   https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument
+                   https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument
               INDEX=$((INDEX + 1))
               sleep 1
             done
@@ -97,16 +102,20 @@ jobs:
               curl -s -F chat_id="${{ inputs.chat_id }}" \
                    -F document=@"${SAFE_NAME}.zip" \
                    -F caption="🎬 تم استخراج ملفات الترجمة والخطوط بنجاح!%0A📌 العمل: ${{ inputs.name }}" \
-                   https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendDocument
+                   https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument
             fi
           fi
 
       - name: Notify Failure to Telegram
-        if: ${{ failure() && inputs.chat_id != '' && secrets.TELEGRAM_BOT_TOKEN != '' }}
+        if: failure() && inputs.chat_id != ''
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
         run: |
-          curl -s -F chat_id="${{ inputs.chat_id }}" \
-               -F text="❌ عذراً، فشل استخراج الترجمات للعمل: ${{ inputs.name }}.%0Aتأكد من صلاحية الرابط وأنه يحتوي على ملفات ترجمة صالحة." \
-               https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage
+          if [ -n "$TELEGRAM_BOT_TOKEN" ]; then
+            curl -s -F chat_id="${{ inputs.chat_id }}" \
+                 -F text="❌ عذراً، فشل استخراج الترجمات للعمل: ${{ inputs.name }}.%0Aتأكد من صلاحية الرابط وأنه يحتوي على ملفات ترجمة صالحة." \
+                 https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage
+          fi
 
       - name: Upload Clean Subtitles Artifact
         uses: actions/upload-artifact@v4
