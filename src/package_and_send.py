@@ -70,41 +70,70 @@ def main():
             print(f"⚠️ Telegram API returned error: {res.stdout}")
 
     # Threshold: 45 MB (47,185,920 bytes) - safely below Telegram's 50MB limit
-    if zip_size <= 47185920:
-        print(f"✅ Archive is under 45MB. Sending single ZIP...")
+    MAX_FILE_BYTES = 47185920
+
+    # Case 1: Standard ZIP is under 45 MB -> Send single universal .zip
+    if zip_size <= MAX_FILE_BYTES:
+        print(f"✅ Archive is under 45MB ({zip_mb:.2f} MB). Sending single universal ZIP...")
         send_to_telegram(zip_path, f"{safe_name}.zip", f"`{safe_name}.zip`")
-    else:
-        print(f"⚠️ ZIP size ({zip_mb:.2f} MB) exceeds 45MB. Compressing with 7-Zip Ultra LZMA2...")
-        # Use 7z with -v45m
-        seven_zip_cmd = ['7z', 'a', '-v45m', '-mx=9', 'bundle_output.7z', f'./{out_dir}/*']
-        subprocess.run(seven_zip_cmd, check=True)
-        
-        # Find all generated 7z files
+        print("\n🎉 Packaging and delivery finished successfully!")
+        return
+
+    # Case 2: Standard ZIP exceeds 45 MB -> Try 7-Zip Ultra LZMA2 WITHOUT splitting
+    print(f"⚠️ Standard ZIP ({zip_mb:.2f} MB) exceeds 45MB. Compressing with 7-Zip Ultra LZMA2...")
+    seven_z_file = 'bundle_output.7z'
+    if os.path.exists(seven_z_file):
+        try: os.remove(seven_z_file)
+        except: pass
+
+    subprocess.run(['7z', 'a', '-mx=9', seven_z_file, f'./{out_dir}/*'], check=True)
+    seven_z_size = os.path.getsize(seven_z_file)
+    seven_z_mb = seven_z_size / (1024 * 1024)
+    print(f"📊 7-Zip Archive size: {seven_z_size} bytes ({seven_z_mb:.2f} MB)")
+
+    # Also keep a copy for GitHub artifacts
+    try:
+        shutil.copy(seven_z_file, f"{safe_name}.7z")
+    except:
+        pass
+
+    # If 7-Zip brought it under 45MB (which happens for ~99% of cases!), send single .7z file!
+    if seven_z_size <= MAX_FILE_BYTES:
+        display_name = f"{safe_name}.7z"
+        print(f"✅ 7-Zip Ultra compressed under 45MB ({seven_z_mb:.2f} MB). Sending single .7z file...")
+        send_to_telegram(seven_z_file, display_name, f"`{display_name}`")
+        print("\n🎉 Packaging and delivery finished successfully!")
+        return
+
+    # Case 3: Archive is huge even with 7-Zip Ultra -> Split into 45MB volumes
+    print(f"⚠️ 7-Zip archive ({seven_z_mb:.2f} MB) still exceeds 45MB. Splitting into 45MB parts...")
+    try: os.remove(seven_z_file)
+    except: pass
+
+    for f in glob.glob('bundle_output.7z*'):
+        try: os.remove(f)
+        except: pass
+
+    subprocess.run(['7z', 'a', '-v45m', '-mx=9', 'bundle_output.7z', f'./{out_dir}/*'], check=True)
+
+    parts = sorted(glob.glob('bundle_output.7z.*'))
+    if not parts:
         parts = sorted(glob.glob('bundle_output.7z*'))
-        if not parts:
-            # Fallback if 7z named it without .7z
-            parts = sorted(glob.glob('bundle_output.*'))
 
-        total_parts = len(parts)
-        print(f"📦 7-Zip created {total_parts} part(s).")
+    total_parts = len(parts)
+    print(f"📦 7-Zip created {total_parts} part(s).")
 
-        if total_parts == 1:
-            part_file = parts[0]
-            ext = os.path.splitext(part_file)[1]
-            if not ext or ext == '.zip':
-                ext = '.7z'
-            display_name = f"{safe_name}{ext}"
-            print(f"✅ 7-Zip compressed under 45MB ({os.path.getsize(part_file)/(1024*1024):.2f} MB). Sending as single file...")
-            send_to_telegram(part_file, display_name, f"`{display_name}`")
-        else:
-            print(f"📤 Sending {total_parts} split parts to Telegram...")
-            for idx, part_file in enumerate(parts, 1):
-                # E.g. bundle_output.7z.001 -> .7z.001
-                ext = part_file.replace('bundle_output', '')
-                display_name = f"{safe_name}{ext}"
-                caption = f"`{safe_name} (الجزء {idx} من {total_parts})`"
-                send_to_telegram(part_file, display_name, caption)
-                time.sleep(1)
+    if total_parts == 1:
+        display_name = f"{safe_name}.7z"
+        send_to_telegram(parts[0], display_name, f"`{display_name}`")
+    else:
+        print(f"📤 Sending {total_parts} split parts to Telegram...")
+        for idx, part_file in enumerate(parts, 1):
+            # Format: filename.7z.001, filename.7z.002 for 7-Zip compatibility
+            display_name = f"{safe_name}.7z.{idx:03d}"
+            caption = f"`{safe_name} - part {idx} of {total_parts}`"
+            send_to_telegram(part_file, display_name, caption)
+            time.sleep(1)
 
     print("\n🎉 Packaging and delivery finished successfully!")
 
