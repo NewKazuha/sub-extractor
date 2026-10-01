@@ -37,8 +37,9 @@ export default {
     if (request.method === 'POST') {
       try {
         const update = await request.json();
-        if (update && update.message && update.message.text) {
-          ctx.waitUntil(handleTelegramMessage(update.message, env));
+        const msg = update?.message || update?.edited_message;
+        if (msg) {
+          ctx.waitUntil(handleTelegramMessage(msg, env));
         }
       } catch (err) {
         console.error('Error handling Telegram update:', err);
@@ -52,7 +53,8 @@ export default {
 
 async function handleTelegramMessage(message, env) {
   const chatId = message.chat.id;
-  const text = (message.text || '').trim();
+  const text = (message.text || message.caption || '').trim();
+  const document = message.document;
 
   // Security check: restrict to allowed user(s) if configured
   if (env.ALLOWED_CHAT_ID) {
@@ -67,42 +69,84 @@ async function handleTelegramMessage(message, env) {
   if (text === '/start' || text === '/help') {
     const helpMsg = `🎬 *مرحباً بك في بوت استخراج الترجمات والخطوط!*
 
-أرسل لي الرابط وتحته اسم العمل، وسيقوم البوت بتشغيل خوادم GitHub لتحميله واستخراج الترجمات والخطوط وإرسالها لك في ملف مضغوط مباشرة هنا!
+أرسل لي الرابط وتحته اسم العمل (أو أرسل ملف .torrent مباشرة)، وسيقوم البوت بتشغيل خوادم GitHub لتحميله واستخراج الترجمات والخطوط وإرسالها لك في ملف مضغوط مباشرة هنا!
 
 📌 *المواقع والروابط المدعومة:*
 • مجلدات وملفات MEGA (\`mega.nz/folder/...\` أو \`file\`)
+• ملفات التورنت (\`.torrent\`) — يمكنك إرسال الملف مباشرة للبوت هنا!
 • فهارس وروابط DDL (\`ddl.3asq.com\` ومواقع الفهارس)
 • Google Drive (ملفات ومجلدات)
 • Pixeldrain & MiteDrive
 • Mediafire
-• روابط التورنت والماجنت (Nyaa، إلخ)
+• روابط التورنت والماجنت (Nyaa، ACG.RIP، إلخ)
 
 💡 *كيفية الاستخدام:*
-أرسل الرابط، وضع اسم العمل في السطر التالي، مثال:
+1️⃣ أرسل الرابط، وضع اسم العمل في السطر التالي، مثال:
 \`https://...\`
-\`اسم العمل\``;
+\`اسم العمل\`
+
+2️⃣ أو أرسل ملف \`.torrent\` مباشرة كملف للبوت (واكتب اسم العمل مع الملف إن أحببت).`;
     await sendTelegramMessage(env.TELEGRAM_BOT_TOKEN, chatId, helpMsg, 'Markdown');
     return;
   }
 
-  // Extract URL from message
-  const urlMatch = text.match(/(https?:\/\/[^\s]+|magnet:\?[^\s]+)/i);
-  if (!urlMatch) {
-    await sendTelegramMessage(env.TELEGRAM_BOT_TOKEN, chatId, '⚠️ لم يتم العثور على رابط صالح.\nيرجى إرسال رابط تحميل صالح (MEGA, DDL, Drive, Torrent, إلخ).');
-    return;
-  }
+  let targetUrl = '';
+  let animeName = '';
 
-  const targetUrl = urlMatch[0];
-  // Extract anime name after removing the URL
-  let animeName = text.replace(targetUrl, '').replace(/^\/extract\s*/i, '').trim();
-  if (!animeName) {
-    await sendTelegramMessage(
-      env.TELEGRAM_BOT_TOKEN,
-      chatId,
-      `⚠️ *يرجى إرسال اسم العمل تحت الرابط!*\n\nمثال:\n\`${targetUrl}\`\n\`اسم العمل\``,
-      'Markdown'
-    );
-    return;
+  // Case A: User sent a .torrent file as a Telegram Document
+  if (document) {
+    const docName = document.file_name || '';
+    if (!docName.toLowerCase().endsWith('.torrent')) {
+      await sendTelegramMessage(
+        env.TELEGRAM_BOT_TOKEN,
+        chatId,
+        '⚠️ عذراً، الملفات المقبولة مباشرة هي ملفات التورنت (`.torrent`) فقط.\nأو يمكنك إرسال رابط تحميل نصي مدعوم.'
+      );
+      return;
+    }
+
+    try {
+      const getFileRes = await fetch(
+        `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/getFile?file_id=${document.file_id}`
+      );
+      const fileData = await getFileRes.json();
+      if (!fileData.ok || !fileData.result?.file_path) {
+        throw new Error('فشل جلب مسار الملف من تليجرام');
+      }
+      targetUrl = `https://api.telegram.org/file/bot${env.TELEGRAM_BOT_TOKEN}/${fileData.result.file_path}`;
+      animeName = text || docName.replace(/\.torrent$/i, '').trim();
+    } catch (docErr) {
+      await sendTelegramMessage(
+        env.TELEGRAM_BOT_TOKEN,
+        chatId,
+        `❌ فشل معالجة ملف التورنت المرسل: ${docErr.message}`
+      );
+      return;
+    }
+  } 
+  // Case B: User sent a text URL
+  else {
+    const urlMatch = text.match(/(https?:\/\/[^\s]+|magnet:\?[^\s]+)/i);
+    if (!urlMatch) {
+      await sendTelegramMessage(
+        env.TELEGRAM_BOT_TOKEN,
+        chatId,
+        '⚠️ لم يتم العثور على رابط صالح أو ملف .torrent.\nيرجى إرسال رابط تحميل صالح (MEGA, DDL, Drive, Torrent, إلخ) أو إرسال ملف .torrent مباشرة.'
+      );
+      return;
+    }
+
+    targetUrl = urlMatch[0];
+    animeName = text.replace(targetUrl, '').replace(/^\/extract\s*/i, '').trim();
+    if (!animeName) {
+      await sendTelegramMessage(
+        env.TELEGRAM_BOT_TOKEN,
+        chatId,
+        `⚠️ *يرجى إرسال اسم العمل تحت الرابط!*\n\nمثال:\n\`${targetUrl}\`\n\`اسم العمل\``,
+        'Markdown'
+      );
+      return;
+    }
   }
 
   // Send acknowledgement message to Telegram
@@ -111,7 +155,7 @@ async function handleTelegramMessage(message, env) {
     chatId,
     `⏳ *تم استلام الطلب بنجاح!*
 📌 *العمل:* \`${animeName}\`
-🔗 *الرابط:* \`${targetUrl.substring(0, 60)}${targetUrl.length > 60 ? '...' : ''}\`
+🔗 *المصدر:* \`${document ? (document.file_name || 'ملف تورنت') : (targetUrl.substring(0, 60) + (targetUrl.length > 60 ? '...' : ''))}\`
 
 🚀 بدأت خوادم GitHub Actions في تنزيل واستخراج الترجمات والخطوط، وسيتم إرسال الملف إليك هنا فور الانتهاء!`,
     'Markdown'

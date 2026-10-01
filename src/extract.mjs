@@ -153,13 +153,15 @@ function extractArchivesRecursively(dir) {
   return anyUnpacked;
 }
 
-const PUBLIC_TRACKERS = [
+const TRACKER_URLS = [
   'http://tr.bangumi.moe:6969/announce',
   'http://open.acg-gov.com:8001/announce',
   'udp://tracker.opentrackr.org:1337/announce',
   'udp://open.stealth.si:80/announce',
   'udp://tracker.torrent.eu.org:451/announce'
-].map(t => `&tr=${encodeURIComponent(t)}`).join('');
+];
+const PUBLIC_TRACKERS = TRACKER_URLS.map(t => `&tr=${encodeURIComponent(t)}`).join('');
+const PUBLIC_TRACKERS_CSV = TRACKER_URLS.join(',');
 
 function extractGoogleDriveId(url) {
   const m = url.match(/(?:drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?id=)|drive\.usercontent\.google\.com\/download\?id=)([a-zA-Z0-9_-]+)/i);
@@ -569,6 +571,30 @@ export async function extractSubtitles(rawUrl, outputName) {
   }
   // 3. Torrents & Magnet Links
   else if (inputUrl.startsWith('magnet:') || inputUrl.includes('.torrent') || inputUrl.includes('nyaa.si') || inputUrl.includes('acg.rip')) {
+    let torrentTarget = inputUrl;
+
+    if (inputUrl.startsWith('http')) {
+      console.log(`📥 Downloading torrent metadata from: ${inputUrl}`);
+      const tPath = path.join(workDir, 'source.torrent');
+      const res = await fetch(inputUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Referer': inputUrl
+        }
+      });
+      const buffer = Buffer.from(await res.arrayBuffer());
+
+      // Verify if it's an HTML page or login redirect
+      const firstBytes = buffer.slice(0, 50).toString('utf8');
+      if (firstBytes.includes('<!DOCTYPE') || firstBytes.includes('<html') || buffer.slice(0, 300).toString('utf8').includes('Revive')) {
+        throw new Error('❌ الرابط المباشر يتطلب تسجيل دخول في الموقع (تم إرجاع صفحة تسجيل دخول بدلاً من ملف تورنت).\n💡 الحل: حمّل ملف الـ .torrent على جهازك من الموقع، ثم أرسل الملف نفسه للبوت في تليجرام مباشرة!');
+      }
+
+      fs.writeFileSync(tPath, buffer);
+      torrentTarget = tPath;
+      console.log(`✅ Torrent metadata file verified and saved (${buffer.length} bytes). Starting BitTorrent client...`);
+    }
+
     const ariaArgs = [
       '--seed-time=0',
       '--summary-interval=5',
@@ -583,9 +609,10 @@ export async function extractSubtitles(rawUrl, outputName) {
       '--bt-max-peers=256',
       '--bt-tracker-connect-timeout=5',
       '--bt-tracker-timeout=10',
+      `--bt-tracker="${PUBLIC_TRACKERS_CSV}"`,
       '--peer-id-prefix=-TR2940-',
       `--dir="${workDir}"`,
-      `"${inputUrl}"`
+      `"${torrentTarget}"`
     ].join(' ');
     run(`aria2c ${ariaArgs}`);
     totalSubs += processWorkDirFiles(workDir, targetSubDir, fontsDir, seenFontNames);
