@@ -22,12 +22,18 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Maximize Runner Disk Space (Free up ~75GB)
+      - name: Maximize Runner Disk Space (Fast & Background Cleanup)
         run: |
-          echo "=== 🧹 Cleaning unused pre-installed packages to maximize free space ==="
-          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/share/powershell /opt/hostedtoolcache/CodeQL /usr/share/swift /usr/lib/jvm || true
-          sudo docker image prune -a --force || true
-          echo "=== 💾 Available Disk Space ==="
+          echo "=== 🧹 Instant fast cleanup of bulky tools ==="
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/share/powershell /opt/hostedtoolcache/CodeQL /usr/share/swift /usr/lib/jvm || true
+
+          echo "=== 🚀 Launching deep cleanup (Android SDK & Docker) in background ==="
+          nohup bash -c '
+            sudo rm -rf /usr/local/lib/android || true
+            sudo docker image prune -a --force || true
+          ' > /dev/null 2>&1 < /dev/null &
+
+          echo "=== 💾 Free Space Available Now ==="
           df -h /
 
       - name: Setup Node.js 22
