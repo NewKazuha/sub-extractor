@@ -64,7 +64,7 @@ async function handleTelegramMessage(message, env) {
   if (text === '/start' || text === '/help') {
     const helpMsg = `🎬 *مرحباً بك في بوت استخراج الترجمات والخطوط!*
 
-أرسل لي أي رابط مدعوم، وسيقوم البوت بتشغيل خوادم GitHub لتحميله واستخراج الترجمات والخطوط وإرسالها لك في ملف \`.zip\` مضغوط مباشرة هنا!
+أرسل لي الرابط واسم العمل، وسيقوم البوت بتشغيل خوادم GitHub لتحميله واستخراج الترجمات والخطوط وإرسالها لك في ملف مضغوط مباشرة هنا!
 
 📌 *المواقع والروابط المدعومة:*
 • مجلدات وملفات MEGA (\`mega.nz/folder/...\` أو \`file\`)
@@ -72,13 +72,11 @@ async function handleTelegramMessage(message, env) {
 • Google Drive (ملفات ومجلدات)
 • Pixeldrain & MiteDrive
 • Mediafire
-• روابط التورنت والماجنت (Nyaa, ACG.RIP, إلخ)
+• روابط التورنت والماجنت (Nyaa، إلخ)
 
 💡 *كيفية الاستخدام:*
-فقط أرسل الرابط مباشرة، أو أرسل:
-\`الرابط اسم_العمل\`
-
-*(معرف حسابك في تليجرام: \`${chatId}\`)*`;
+أرسل الرابط متبوعاً بمسافة ثم اسم العمل، مثال:
+\`الرابط اسم_العمل\``;
     await sendTelegramMessage(env.TELEGRAM_BOT_TOKEN, chatId, helpMsg, 'Markdown');
     return;
   }
@@ -91,10 +89,16 @@ async function handleTelegramMessage(message, env) {
   }
 
   const targetUrl = urlMatch[0];
-  // Any text remaining after removing the URL is treated as the anime name
+  // Extract anime name after removing the URL
   let animeName = text.replace(targetUrl, '').replace(/^\/extract\s*/i, '').trim();
   if (!animeName) {
-    animeName = 'Anime_Subtitles';
+    await sendTelegramMessage(
+      env.TELEGRAM_BOT_TOKEN,
+      chatId,
+      `⚠️ *يرجى إرسال اسم العمل بجانب الرابط!*\n\nمثال:\n\`${targetUrl} اسم_العمل\``,
+      'Markdown'
+    );
+    return;
   }
 
   // Send acknowledgement message to Telegram
@@ -105,7 +109,7 @@ async function handleTelegramMessage(message, env) {
 📌 *العمل:* \`${animeName}\`
 🔗 *الرابط:* \`${targetUrl.substring(0, 60)}${targetUrl.length > 60 ? '...' : ''}\`
 
-🚀 بدأت خوادم GitHub Actions في تنزيل واستخراج الترجمات والخطوط، وسيتم إرسال ملف الـ \`.zip\` إليك هنا فور الانتهاء!`,
+🚀 بدأت خوادم GitHub Actions في تنزيل واستخراج الترجمات والخطوط، وسيتم إرسال الملف إليك هنا فور الانتهاء!`,
     'Markdown'
   );
 
