@@ -77,8 +77,7 @@ jobs:
         run: |
           if [ -n "$TELEGRAM_BOT_TOKEN" ]; then
             curl -s -F "chat_id=${TELEGRAM_CHAT_ID}" \
-                 -F "text=❌ عذراً، فشل استخراج الترجمات للعمل: ${ANIME_NAME}.
-تأكد من صلاحية الرابط وأنه يحتوي على ملفات ترجمة صالحة." \
+                 -F "text=❌ عذراً، فشل استخراج الترجمات للعمل: ${ANIME_NAME}.%0Aتأكد من صلاحية الرابط وأنه يحتوي على ملفات ترجمة صالحة." \
                  https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage
           fi
 
