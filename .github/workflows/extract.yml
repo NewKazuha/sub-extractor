@@ -54,8 +54,11 @@ jobs:
           npm install
 
       - name: Turbo Download & Extract Subtitles
+        env:
+          INPUT_URL: ${{ inputs.url }}
+          INPUT_NAME: ${{ inputs.name }}
         run: |
-          node src/extract.mjs "${{ inputs.url }}" "${{ inputs.name }}"
+          node src/extract.mjs "$INPUT_URL" "$INPUT_NAME"
 
       - name: Package Subtitles & Send to Telegram
         env:
@@ -69,10 +72,13 @@ jobs:
         if: failure() && inputs.chat_id != ''
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ inputs.chat_id }}
+          ANIME_NAME: ${{ inputs.name }}
         run: |
           if [ -n "$TELEGRAM_BOT_TOKEN" ]; then
-            curl -s -F chat_id="${{ inputs.chat_id }}" \
-                 -F text="❌ عذراً، فشل استخراج الترجمات للعمل: ${{ inputs.name }}.%0Aتأكد من صلاحية الرابط وأنه يحتوي على ملفات ترجمة صالحة." \
+            curl -s -F "chat_id=${TELEGRAM_CHAT_ID}" \
+                 -F "text=❌ عذراً، فشل استخراج الترجمات للعمل: ${ANIME_NAME}.
+تأكد من صلاحية الرابط وأنه يحتوي على ملفات ترجمة صالحة." \
                  https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage
           fi
 
@@ -82,7 +88,7 @@ jobs:
         env:
           RAW_NAME: ${{ inputs.name }}
         run: |
-          SAFE_NAME=$(python3 -c "import os, re; print(re.sub(r'[\/:*?\"<>|\\\\]', '_', os.environ.get('RAW_NAME', '')).strip() or 'Anime_Subtitles')")
+          SAFE_NAME=$(python3 -c "import os, re; print(re.sub(r'[\/:*?\"<>|\\\\\r\n]', '_', os.environ.get('RAW_NAME', '')).strip() or 'Anime_Subtitles')")
           echo "safe_name=$SAFE_NAME" >> "$GITHUB_OUTPUT"
 
       - name: Upload Clean Subtitles Artifact
@@ -95,7 +101,10 @@ jobs:
           if-no-files-found: ignore
 
       - name: Summary
+        if: always()
+        env:
+          ANIME_NAME: ${{ inputs.name }}
         run: |
           echo "### 🎬 تم استخراج ملفات الترجمة والخطوط بنجاح!" >> $GITHUB_STEP_SUMMARY
-          echo "- **العمل:** \`${{ inputs.name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **العمل:** \`${ANIME_NAME}\`" >> $GITHUB_STEP_SUMMARY
           echo "يمكنك تنزيل الملف النظيف مباشرة من قسم **Artifacts** في الأعلى." >> $GITHUB_STEP_SUMMARY

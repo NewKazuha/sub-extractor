@@ -149,6 +149,9 @@ async function handleTelegramMessage(message, env) {
     }
   }
 
+  // Clean animeName: replace newlines with spaces and convert backticks
+  animeName = animeName.replace(/[\r\n]+/g, ' ').replace(/`/g, "'").trim();
+
   // Send acknowledgement message to Telegram
   await sendTelegramMessage(
     env.TELEGRAM_BOT_TOKEN,

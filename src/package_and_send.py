@@ -11,8 +11,9 @@ def main():
     token = os.environ.get('TELEGRAM_BOT_TOKEN', '').strip()
     anime_name = os.environ.get('ANIME_NAME', 'Subtitles').strip()
     
-    # Sanitize anime name for filename
-    safe_name = re.sub(r'[\\/:*?"<>|]', '_', anime_name).strip() or 'Subtitles'
+    # Sanitize anime name for filename (remove NTFS forbidden chars and newlines/backticks)
+    safe_name = re.sub(r'[\\/:*?"<>|`\r\n]', '_', anime_name).strip() or 'Subtitles'
+    safe_name = re.sub(r'_+', '_', safe_name).strip('_') or 'Subtitles'
     
     out_dir = 'extracted_subtitles'
     if not os.path.exists(out_dir):
