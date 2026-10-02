@@ -76,12 +76,23 @@ jobs:
                  https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage
           fi
 
+      - name: Prepare Safe Artifact Name
+        id: prep
+        if: always()
+        env:
+          RAW_NAME: ${{ inputs.name }}
+        run: |
+          SAFE_NAME=$(python3 -c "import os, re; print(re.sub(r'[\/:*?\"<>|\\\\]', '_', os.environ.get('RAW_NAME', '')).strip() or 'Anime_Subtitles')")
+          echo "safe_name=$SAFE_NAME" >> "$GITHUB_OUTPUT"
+
       - name: Upload Clean Subtitles Artifact
         uses: actions/upload-artifact@v4
+        if: success()
         with:
-          name: "${{ inputs.name }}"
+          name: "${{ steps.prep.outputs.safe_name }}"
           path: extracted_subtitles/
           retention-days: 30
+          if-no-files-found: ignore
 
       - name: Summary
         run: |
