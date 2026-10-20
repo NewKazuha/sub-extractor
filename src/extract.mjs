@@ -341,10 +341,13 @@ function processWorkDirFiles(workDir, targetSubDir, fontsDir, seenFontNames) {
     }
   }
 
+let _cachedWantedLangs = null;
 function getWantedLangs() {
+  if (_cachedWantedLangs) return _cachedWantedLangs;
   const raw = (process.env.INPUT_LANGS || 'all').toLowerCase();
   const list = raw.split(',').map((s) => s.trim()).filter(Boolean);
-  return list.length > 0 ? list : ['all'];
+  _cachedWantedLangs = list.length > 0 ? list : ['all'];
+  return _cachedWantedLangs;
 }
 
 function isTrackWanted(trk) {
@@ -704,6 +707,7 @@ if (process.argv[1]?.endsWith('extract.mjs')) {
   const name = process.argv[3] || 'Subtitles';
   if (process.argv[4]) {
     process.env.INPUT_LANGS = process.argv[4];
+    _cachedWantedLangs = null;
   }
   extractSubtitles(url, name).catch((e) => {
     console.error('Error:', e);
