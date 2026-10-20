@@ -341,10 +341,35 @@ function processWorkDirFiles(workDir, targetSubDir, fontsDir, seenFontNames) {
     }
   }
 
+function getWantedLangs() {
+  const raw = (process.env.INPUT_LANGS || 'all').toLowerCase();
+  const list = raw.split(',').map((s) => s.trim()).filter(Boolean);
+  return list.length > 0 ? list : ['all'];
+}
+
+function isTrackWanted(trk) {
+  const wanted = getWantedLangs();
+  if (wanted.includes('all')) return true;
+  const lang = (trk.properties?.language || trk.properties?.language_ietf || 'und').toLowerCase();
+  const name = (trk.properties?.track_name || '').toLowerCase();
+  return wanted.some((w) => {
+    if (lang === w || lang.startsWith(w + '-')) return true;
+    if (name.includes(w)) return true;
+    if ((w === 'ara' || w === 'ar') && (
+      lang === 'ara' || lang === 'ar' || lang.startsWith('ar-') ||
+      name.includes('arabic') || name.includes('عربي') || name.includes('العربية')
+    )) {
+      return true;
+    }
+    return false;
+  });
+}
+
   // 3. Discover standalone subtitle files
   const standaloneSubs = findAllSubtitleFiles(workDir);
   if (standaloneSubs.length > 0) {
     console.log(`📝 Found ${standaloneSubs.length} standalone subtitle file(s) in source/archive.`);
+    const wanted = getWantedLangs();
     for (const sFile of standaloneSubs) {
       const sBase = path.basename(sFile);
       let detectedLang = 'Other';
@@ -355,6 +380,20 @@ function processWorkDirFiles(workDir, targetSubDir, fontsDir, seenFontNames) {
           break;
         }
       }
+
+      if (!wanted.includes('all')) {
+        const isStandaloneWanted = wanted.some((w) => {
+          if (w === 'ara' || w === 'ar') {
+            return lower.includes('arabic') || lower.includes('عربي') || lower.includes('.ar.') || lower.includes('.ara.') || detectedLang === 'Arabic';
+          }
+          return lower.includes(w) || detectedLang.toLowerCase() === w;
+        });
+        if (!isStandaloneWanted) {
+          try { fs.rmSync(sFile, { force: true }); } catch {}
+          continue;
+        }
+      }
+
       const langDir = path.join(targetSubDir, detectedLang);
       fs.mkdirSync(langDir, { recursive: true });
       fs.copyFileSync(sFile, path.join(langDir, sBase));
@@ -377,7 +416,7 @@ function processWorkDirFiles(workDir, targetSubDir, fontsDir, seenFontNames) {
     } catch {}
 
     if (mkvInfo && Array.isArray(mkvInfo.tracks)) {
-      const subTracks = mkvInfo.tracks.filter((t) => t.type === 'subtitles');
+      const subTracks = mkvInfo.tracks.filter((t) => t.type === 'subtitles' && isTrackWanted(t));
       const attachments = (mkvInfo.attachments || []).filter((a) => /\.(ttf|otf|ttc|woff|woff2)$/i.test(a.file_name || ''));
 
       const trackArgs = [];
@@ -663,6 +702,9 @@ export async function extractSubtitles(rawUrl, outputName) {
 if (process.argv[1]?.endsWith('extract.mjs')) {
   const url = process.argv[2] || '';
   const name = process.argv[3] || 'Subtitles';
+  if (process.argv[4]) {
+    process.env.INPUT_LANGS = process.argv[4];
+  }
   extractSubtitles(url, name).catch((e) => {
     console.error('Error:', e);
     process.exit(1);

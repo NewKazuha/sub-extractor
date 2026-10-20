@@ -55,7 +55,6 @@ def main():
             'curl', '-s', '-S',
             '-F', f'chat_id={chat_id}',
             '-F', f'document=@{local_file};filename={display_filename}',
-            '-F', 'parse_mode=Markdown',
             '-F', f'caption={caption_text}',
             f'https://api.telegram.org/bot{token}/sendDocument'
         ]
@@ -76,7 +75,7 @@ def main():
     # Case 1: Standard ZIP is under 45 MB -> Send single universal .zip
     if zip_size <= MAX_FILE_BYTES:
         print(f"✅ Archive is under 45MB ({zip_mb:.2f} MB). Sending single universal ZIP...")
-        send_to_telegram(zip_path, f"{safe_name}.zip", f"`{safe_name}.zip`")
+        send_to_telegram(zip_path, f"{safe_name}.zip", anime_name)
         print("\n🎉 Packaging and delivery finished successfully!")
         return
 
@@ -102,7 +101,7 @@ def main():
     if seven_z_size <= MAX_FILE_BYTES:
         display_name = f"{safe_name}.7z"
         print(f"✅ 7-Zip Ultra compressed under 45MB ({seven_z_mb:.2f} MB). Sending single .7z file...")
-        send_to_telegram(seven_z_file, display_name, f"`{display_name}`")
+        send_to_telegram(seven_z_file, display_name, anime_name)
         print("\n🎉 Packaging and delivery finished successfully!")
         return
 
@@ -126,13 +125,13 @@ def main():
 
     if total_parts == 1:
         display_name = f"{safe_name}.7z"
-        send_to_telegram(parts[0], display_name, f"`{display_name}`")
+        send_to_telegram(parts[0], display_name, anime_name)
     else:
         print(f"📤 Sending {total_parts} split parts to Telegram...")
         for idx, part_file in enumerate(parts, 1):
             # Format: filename.7z.001, filename.7z.002 for 7-Zip compatibility
             display_name = f"{safe_name}.7z.{idx:03d}"
-            caption = f"`{safe_name} - part {idx} of {total_parts}`"
+            caption = f"{anime_name} - part {idx} of {total_parts}"
             send_to_telegram(part_file, display_name, caption)
             time.sleep(1)
 
