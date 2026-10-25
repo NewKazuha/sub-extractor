@@ -79,6 +79,36 @@ function sanitizeFilename(name) {
   return name.replace(/[\\/:*?"<>|]+/g, '_').replace(/\s+/g, ' ').trim();
 }
 
+function makeSafeSubFilename(baseName, trackTitle, ext, maxBytes = 130) {
+  let cleanTrack = trackTitle ? `_[${sanitizeFilename(trackTitle)}]` : '';
+  let full = `${baseName}${cleanTrack}.${ext}`;
+  if (Buffer.byteLength(full, 'utf8') <= maxBytes) return full;
+
+  // Try extracting the episode tag & title: e.g. "[Group] - S01E01 - Title [Quality]"
+  const epMatch = baseName.match(/(\s*-\s*(?:S\d+E\d+|EP?\d+|\d{1,4}(?:v\d+)?)\b[\s\S]*)/i);
+  if (epMatch) {
+    const group = baseName.match(/^(\[[^\]]+\])/)?.[1] || '';
+    let candidate = `${group} ${epMatch[1].trim()}${cleanTrack}.${ext}`.trim();
+    if (Buffer.byteLength(candidate, 'utf8') <= maxBytes) return candidate;
+
+    // If still too long, try just: [Group] S01E01_[Track].ext
+    const shortEp = baseName.match(/(\b(?:S\d+E\d+|EP?\d+|\d{1,4}(?:v\d+)?)\b)/i)?.[1] || '';
+    if (shortEp) {
+      let shortCand = `${group} ${shortEp}${cleanTrack}.${ext}`.trim();
+      if (Buffer.byteLength(shortCand, 'utf8') <= maxBytes) return shortCand;
+    }
+  }
+
+  // Hard truncate base if still too long
+  const extPart = `${cleanTrack}.${ext}`;
+  const allowedBaseBytes = maxBytes - Buffer.byteLength(extPart, 'utf8') - 5;
+  let truncatedBase = baseName;
+  while (Buffer.byteLength(truncatedBase, 'utf8') > allowedBaseBytes && truncatedBase.length > 10) {
+    truncatedBase = truncatedBase.slice(0, -1);
+  }
+  return `${truncatedBase.trim()}...${extPart}`;
+}
+
 function extractArchivesRecursively(dir) {
   const archiveExts = ['.rar', '.zip', '.7z', '.tar', '.gz', '.bz2', '.xz', '.tgz'];
   let anyUnpacked = false;
@@ -399,7 +429,10 @@ function isTrackWanted(trk) {
 
       const langDir = path.join(targetSubDir, detectedLang);
       fs.mkdirSync(langDir, { recursive: true });
-      fs.copyFileSync(sFile, path.join(langDir, sBase));
+      const rawExt = path.extname(sBase).replace(/^\./, '') || 'ass';
+      const rawName = path.basename(sBase, path.extname(sBase));
+      const safeSBase = makeSafeSubFilename(rawName, '', rawExt, 130);
+      fs.copyFileSync(sFile, path.join(langDir, safeSBase));
       extractedCount++;
       try { fs.rmSync(sFile, { force: true }); } catch {}
     }
@@ -423,6 +456,7 @@ function isTrackWanted(trk) {
       const attachments = (mkvInfo.attachments || []).filter((a) => /\.(ttf|otf|ttc|woff|woff2)$/i.test(a.file_name || ''));
 
       const trackArgs = [];
+      const expectedSubFiles = [];
       for (const trk of subTracks) {
         const codec = (trk.codec || '').toLowerCase();
         const ext = codec.includes('subrip') || codec.includes('srt') ? 'srt' : 'ass';
@@ -432,10 +466,11 @@ function isTrackWanted(trk) {
         const langDir = path.join(targetSubDir, langFolder);
         fs.mkdirSync(langDir, { recursive: true });
 
-        const trackTitle = trk.properties?.track_name ? `_[${sanitizeFilename(trk.properties.track_name)}]` : '';
-        const subOutFile = path.join(langDir, `${baseName}${trackTitle}.${ext}`);
+        const trackTitle = trk.properties?.track_name || '';
+        const safeSubName = makeSafeSubFilename(baseName, trackTitle, ext, 130);
+        const subOutFile = path.join(langDir, safeSubName);
         trackArgs.push(`${trk.id}:"${subOutFile}"`);
-        extractedCount++;
+        expectedSubFiles.push(subOutFile);
       }
 
       if (trackArgs.length > 0) {
@@ -446,6 +481,9 @@ function isTrackWanted(trk) {
           for (const arg of trackArgs) {
             try { run(`mkvextract tracks "${vFile}" ${arg}`); } catch {}
           }
+        }
+        for (const outPath of expectedSubFiles) {
+          if (fs.existsSync(outPath)) extractedCount++;
         }
       }
 
@@ -467,7 +505,8 @@ function isTrackWanted(trk) {
       }
     } else {
       // Fallback for non-MKV (e.g. mp4)
-      const fallbackAss = path.join(targetSubDir, `${baseName}.ass`);
+      const safeFallbackName = makeSafeSubFilename(baseName, '', 'ass', 130);
+      const fallbackAss = path.join(targetSubDir, safeFallbackName);
       try {
         run(`ffmpeg -y -i "${vFile}" -map 0:s:0 -c:s copy "${fallbackAss}"`);
         extractedCount++;
