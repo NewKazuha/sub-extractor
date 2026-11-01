@@ -111,6 +111,8 @@ function makeSafeSubFilename(baseName, trackTitle, ext, maxBytes = 130) {
 
 function extractArchivesRecursively(dir) {
   const archiveExts = ['.rar', '.zip', '.7z', '.tar', '.gz', '.bz2', '.xz', '.tgz'];
+  // Split volume part extensions (these are NOT extracted directly; their main volume is)
+  const splitVolumePartRegex = /\.z\d{2}$|\.part\d+\.rar$|\.r\d{2,}$|\.7z\.\d{3}$/i;
   let anyUnpacked = false;
 
   function findArchives(d) {
@@ -131,17 +133,58 @@ function extractArchivesRecursively(dir) {
     return found;
   }
 
+  // Find split volume part files (.z01, .z02, .r00, .r01, .7z.001 etc.)
+  function findSplitVolumeParts(d) {
+    const parts = [];
+    if (!fs.existsSync(d)) return parts;
+    const entries = fs.readdirSync(d, { withFileTypes: true });
+    for (const entry of entries) {
+      const full = path.join(d, entry.name);
+      if (entry.isDirectory()) {
+        parts.push(...findSplitVolumeParts(full));
+      } else if (entry.isFile()) {
+        if (splitVolumePartRegex.test(entry.name.toLowerCase())) {
+          parts.push(full);
+        }
+      }
+    }
+    return parts;
+  }
+
   for (let pass = 1; pass <= 5; pass++) {
     const archives = findArchives(dir);
     if (archives.length === 0) break;
     anyUnpacked = true;
 
+    // Detect split ZIP archives: if we have .z01 files, the corresponding .zip is the main volume
+    // We need to identify which .zip files are "main volumes" of split archives
+    const splitVolumeParts = findSplitVolumeParts(dir);
+    const splitMainVolumes = new Set();
+
+    for (const partFile of splitVolumeParts) {
+      const lower = path.basename(partFile).toLowerCase();
+      // .z01, .z02 etc. -> main volume is the matching .zip
+      if (/\.z\d{2}$/.test(lower)) {
+        const baseStem = partFile.replace(/\.z\d{2}$/i, '');
+        const mainZip = baseStem + '.zip';
+        if (fs.existsSync(mainZip)) {
+          splitMainVolumes.add(mainZip);
+        }
+      }
+    }
+
     for (const arch of archives) {
       const targetDir = path.dirname(arch);
-      console.log(`📦 Unpacking archive: ${path.basename(arch)}...`);
+      const isSplitMain = splitMainVolumes.has(arch);
+      
+      if (isSplitMain) {
+        console.log(`📦 Unpacking split archive (main volume): ${path.basename(arch)}...`);
+      } else {
+        console.log(`📦 Unpacking archive: ${path.basename(arch)}...`);
+      }
       let success = false;
 
-      // 1. Try 7z (supported via 7zip / p7zip-full, handles RAR5/7z/ZIP/TAR)
+      // 1. Try 7z (supported via 7zip / p7zip-full, handles RAR5/7z/ZIP/TAR and split volumes)
       try {
         run(`7z x -y -p"" -o"${targetDir}" "${arch}"`);
         success = true;
@@ -175,6 +218,13 @@ function extractArchivesRecursively(dir) {
 
       if (success) {
         fs.rmSync(arch, { force: true });
+        // If this was a split main volume, also clean up the volume part files
+        if (isSplitMain) {
+          for (const partFile of splitVolumeParts) {
+            try { fs.rmSync(partFile, { force: true }); } catch {}
+          }
+          console.log(`🧹 Cleaned up split archive volume parts.`);
+        }
       } else {
         console.warn(`⚠️ Warning: Could not unpack archive: ${path.basename(arch)}`);
       }
@@ -196,6 +246,52 @@ const PUBLIC_TRACKERS_CSV = TRACKER_URLS.join(',');
 function extractGoogleDriveId(url) {
   const m = url.match(/(?:drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?id=)|drive\.usercontent\.google\.com\/download\?id=)([a-zA-Z0-9_-]+)/i);
   return m ? m[1] : null;
+}
+
+function extractGoogleDriveFolderId(url) {
+  const m = url.match(/drive\.google\.com\/(?:drive\/(?:u\/\d+\/)?)?folders\/([a-zA-Z0-9_-]+)/i);
+  return m ? m[1] : null;
+}
+
+async function resolveGdriveFolderFiles(folderId) {
+  console.log(`🔍 Resolving Google Drive folder files (${folderId})...`);
+  const url = `https://drive.google.com/drive/folders/${folderId}`;
+  try {
+    const res = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      }
+    });
+    if (!res.ok) return [];
+    const html = await res.text();
+    const files = [];
+
+    // Parse window['_DRIVE_ivd']
+    const ivdMatch = html.match(/window\['_DRIVE_ivd'\]\s*=\s*'([^']+)'/);
+    if (ivdMatch) {
+      const raw = ivdMatch[1].replace(/\\x([0-9A-Fa-f]{2})/g, (match, hex) => String.fromCharCode(parseInt(hex, 16)));
+      const regex = /\["([a-zA-Z0-9_-]{25,})",\["[^"]*"\],"([^"]+)"/g;
+      let m;
+      while ((m = regex.exec(raw)) !== null) {
+        files.push({ id: m[1], name: m[2] });
+      }
+    }
+
+    if (files.length === 0) {
+      const dataIdRegex = /data-id="([a-zA-Z0-9_-]{25,})"[^>]*data-tooltip="([^"]+)"/g;
+      let m;
+      while ((m = dataIdRegex.exec(html)) !== null) {
+        const cleanName = m[2].replace(/\s+(Binary|Compressed archive|Video|Audio).*$/, '').trim();
+        files.push({ id: m[1], name: cleanName });
+      }
+    }
+
+    console.log(`📁 Found ${files.length} file(s) in Google Drive folder:`, files.map(f => f.name).join(', '));
+    return files;
+  } catch (err) {
+    console.warn(`⚠️ Warning: Failed to parse Google Drive folder: ${err.message}`);
+    return [];
+  }
 }
 
 async function resolveMitedriveDirectUrl(url) {
@@ -700,15 +796,57 @@ export async function extractSubtitles(rawUrl, outputName) {
   }
   // 4. Google Drive
   else if (isGdrive) {
-    if (inputUrl.includes('/folders/')) {
-      run(`gdown "${inputUrl}" -O "${workDir}/" --folder --fuzzy`);
+    const folderId = extractGoogleDriveFolderId(inputUrl);
+    if (folderId) {
+      console.log(`📂 Processing Google Drive folder (${folderId})...`);
+      const folderFiles = await resolveGdriveFolderFiles(folderId);
+      if (folderFiles.length > 0) {
+        for (let i = 0; i < folderFiles.length; i++) {
+          const item = folderFiles[i];
+          console.log(`\n⬇️ [${i + 1}/${folderFiles.length}] Downloading Google Drive file: ${item.name} (${item.id})...`);
+          let dlSuccess = false;
+          // A. Try direct aria2c with confirm=t (Fastest, handles large >1GB files bypass)
+          try {
+            const directGdrive = `https://drive.usercontent.google.com/download?id=${item.id}&export=download&confirm=t`;
+            run(`aria2c --dir="${workDir}" --out="${item.name}" --content-disposition=true --file-allocation=none --check-certificate=false --header="User-Agent: Mozilla/5.0" --max-connection-per-server=16 --split=16 "${directGdrive}"`);
+            dlSuccess = true;
+          } catch (err) {
+            console.warn(`⚠️ aria2c download failed for ${item.name}: ${err.message}. Retrying with gdown...`);
+          }
+          // B. Fallback to gdown
+          if (!dlSuccess) {
+            try {
+              run(`gdown --id "${item.id}" -O "${path.join(workDir, item.name)}" --fuzzy`);
+              dlSuccess = true;
+            } catch (err2) {
+              console.warn(`⚠️ gdown download also failed for ${item.name}: ${err2.message}`);
+            }
+          }
+        }
+      } else {
+        // Fallback to gdown --folder if HTML parsing found no files
+        console.log(`🔄 Attempting gdown --folder fallback...`);
+        try {
+          run(`gdown "${inputUrl}" -O "${workDir}/" --folder --fuzzy --remaining-ok`);
+        } catch (err) {
+          console.warn(`⚠️ gdown --folder failed: ${err.message}`);
+        }
+      }
     } else if (gdriveId) {
+      let dlSuccess = false;
       try {
-        run(`gdown --id "${gdriveId}" -O "${workDir}/" --fuzzy`);
-      } catch (err) {
-        console.warn('⚠️ Warning: gdown direct download failed, attempting aria2c fallback with confirm=t...');
         const directGdrive = `https://drive.usercontent.google.com/download?id=${gdriveId}&export=download&confirm=t`;
-        run(`aria2c --dir="${workDir}" --content-disposition=true --check-certificate=false --header="User-Agent: Mozilla/5.0" "${directGdrive}"`);
+        run(`aria2c --dir="${workDir}" --content-disposition=true --file-allocation=none --check-certificate=false --header="User-Agent: Mozilla/5.0" --max-connection-per-server=16 --split=16 "${directGdrive}"`);
+        dlSuccess = true;
+      } catch (err) {
+        console.warn('⚠️ Warning: aria2c direct download failed, attempting gdown...');
+      }
+      if (!dlSuccess) {
+        try {
+          run(`gdown --id "${gdriveId}" -O "${workDir}/" --fuzzy`);
+        } catch (err2) {
+          console.warn(`⚠️ gdown failed: ${err2.message}`);
+        }
       }
     } else {
       run(`gdown "${inputUrl}" -O "${workDir}/" --fuzzy`);
